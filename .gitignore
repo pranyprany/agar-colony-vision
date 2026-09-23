@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.pt
+dataset/
+runs/
+generated/
+colonies/
+input_data/
+empty_dishes/
+style_dishes/
