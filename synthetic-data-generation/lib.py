@@ -268,6 +268,19 @@ def get_alpha_from_segmentation(patch):
     alpha_matrix = dilation(alpha_matrix, square(dilation_step.astype(np.uint16))) # adding margin to segmentation mask
     return alpha_matrix
 
+def ellipse_alpha(shape, grouped_coordinates):
+    """
+    fallback alpha: union of ellipses inscribed in each annotated bbox (patch-local coordinates)
+    """
+    alpha = np.zeros(shape, dtype=np.uint8)
+    for c in grouped_coordinates:
+        h, w = c.y2 - c.y1, c.x2 - c.x1
+        if h <= 0 or w <= 0: continue
+        yy, xx = np.ogrid[:h, :w]
+        inside = ((yy - (h-1)/2.) / (h/2.))**2 + ((xx - (w-1)/2.) / (w/2.))**2 <= 1.
+        alpha[c.y1:c.y2, c.x1:c.x2] |= inside.astype(np.uint8)
+    return alpha
+
 def get_alpha_from_blending_with_backgroung(patch, alpha_from_seg, alpha_from_bboxes):
     """
     generate mask with lower values where pixel_color ~ patch_background_color: 
@@ -277,11 +290,13 @@ def get_alpha_from_blending_with_backgroung(patch, alpha_from_seg, alpha_from_bb
     patch_lab = color.rgb2lab(patch)
     # patch backround area
     background_colors = patch_lab[np.logical_and(alpha_from_bboxes == 1, alpha_from_seg == 0)]
+    if len(background_colors) == 0:
+        background_colors = patch_lab[alpha_from_bboxes == 1]
     bgd_c = [np.mean(background_colors[:,i]) for i in range(3)] # average backround color
     # distance from backround color in Lab colorspace
-    lab_dist = np.sqrt((patch_lab[:,:,0]-bgd_c[0])**2+(patch_lab[:,:,1]-bgd_c[1])**2+(patch_lab[:,:,2]-bgd_c[2])**2)  
+    lab_dist = np.sqrt((patch_lab[:,:,0]-bgd_c[0])**2+(patch_lab[:,:,1]-bgd_c[1])**2+(patch_lab[:,:,2]-bgd_c[2])**2)
     # normalization and weighting
-    lab_dist /= np.amax(lab_dist)
+    lab_dist /= max(np.amax(lab_dist), 1e-6)
     lab_dist = np.sqrt(np.sin(lab_dist*np.pi/2.))
     lab_dist = .6 + lab_dist*.4
     #

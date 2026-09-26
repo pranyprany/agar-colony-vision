@@ -9,43 +9,52 @@ which accompanies:
 > J. Pawłowski, S. Majchrowska, & T. Golan, *Generation of microbial colonies dataset with
 > deep learning style transfer*, Scientific Reports 12, 5212 (2022).
 
-The goal of pulling this in was to test whether style-transfer-augmented training data
-improves on the [detection](../detection) baseline (P=0.930, R=0.870, mAP50=0.923).
+The goal is to test whether style-transfer-augmented training data improves on the
+[detection](../detection) baseline (P=0.930, R=0.870, mAP50=0.923).
 
 ## Status
 
-The pipeline runs end-to-end on current Python/PyTorch/scikit-image after fixing several
-places where 2021-era code had drifted from current library APIs:
+The pipeline runs end-to-end on current Python / PyTorch / scikit-image / NumPy 2 and produces
+labeled crops. **No detector has been trained on synthetic data yet**, so there is no measured
+effect on the baseline.
 
-- `networkx.from_numpy_matrix` → `from_numpy_array` (removed in networkx 3.x)
-- `skimage`'s `multichannel=` kwarg → `channel_axis=-1` (removed in scikit-image 0.21+)
-- `chan_vese(max_iter=...)` → `max_num_iter=...` (renamed)
+![Generated dish: stylized crops, bounding boxes, instance masks](samples/overview.png)
+
+Top row: style-transferred 512×512 crops. Middle: bounding-box labels. Bottom: instance masks.
+The full crops, labels and masks for this dish are in [`samples/`](samples).
+
+Known limitations of the current output:
+- Colonies that fell back to an inscribed ellipse (see below) have crisp, uniform edges and can
+  look pasted-on; overlapping annotation groups can produce blocky fragments.
+- Each generated dish contains a single species (the generator picks one per dish), so a
+  dataset needs to be balanced across dishes.
+- Stylization quality was only checked by eye.
+
+## What was changed from upstream
+
+Library-drift fixes (the 2021 code no longer ran):
+- `networkx.from_numpy_matrix` → `from_numpy_array`
+- `skimage` `multichannel=` → `channel_axis=-1`; `chan_vese(max_iter=)` → `max_num_iter=`
 - `torchvision.models.vgg19(pretrained=True)` → `weights=VGG19_Weights.DEFAULT`
-- a latent bug in the original code: `uint8_array * 65536` used to silently wrap around
-  under old NumPy; NumPy 2's stricter casting turns that into a hard `OverflowError`.
-  Fixed by casting to `int64` before the multiply (`grow_colonies.py`, all 4 quadrant blocks).
+- `uint8_array * 65536` used to wrap silently under old NumPy and now raises `OverflowError`;
+  cast to `int64` first (`grow_colonies.py`, all 4 quadrant blocks).
 
-Two sample generated dishes are in [`samples/`](samples), each with its YOLO-style bounding
-boxes (`.json`) and an instance-segmentation preview (`_iseg.png`):
+Label-quality fix (`get_patches.py`, `lib.py`):
+- On low-contrast species (mostly *B. subtilis*, many *E. coli*), Chan-Vese segmentation
+  frequently collapsed to "everything is colony". The blending step then averaged an empty
+  background set (NaN → alpha 0), so a bounding box was written for a colony that was invisible,
+  or the mask became the whole box (square patches). In one extraction run, 162 of 281
+  *B. subtilis* and 257 of 589 *E. coli* patches had essentially empty alpha.
+- Now the segmentation is validated (must cover 20–96% of the annotated box); otherwise the alpha
+  falls back to an ellipse inscribed in each annotated box. The NaN case is also guarded.
+  After the fix no extracted patch has an empty or full-box alpha.
 
-| Generated dish | Instance segmentation |
-|---|---|
-| ![sample 1](samples/260923_193124_1_.png) | ![sample 1 iseg](samples/260923_193124_1__iseg.png) |
-| ![sample 2](samples/260923_193124_2_.png) | ![sample 2 iseg](samples/260923_193124_2__iseg.png) |
-
-These were capped at 80/500 optimization steps to produce a result in reasonable time, so the
-stylization is visibly under-converged — flatter and more pastel than the paper's fully
-converged output. They demonstrate the mechanics working (correct colony placement, correct
-bbox transforms through crop/rotation, correct instance masks), not final training-ready quality.
-
-**Not yet done:** a full retrain-and-compare against the detection baseline. On a single
-laptop RTX 4070 this network is slow at its native 1024×1024 resolution — roughly
-**7s/optimization step**, so one dish at the paper's default 500 steps is about **65 minutes**.
-Generating enough synthetic dishes to meaningfully augment training (hundreds, matching the
-paper's own augmentation scale) is on the order of tens of GPU-hours. Candidates for speeding
-this up before attempting that: mixed precision (`torch.autocast`), batching multiple dishes
-per style-transfer call instead of one dish per full 500-step optimization, or reducing the
-working resolution.
+Speed (`transfer_style_lib.py`):
+- The style-transfer loop now runs under bf16 autocast. On an 8 GB laptop RTX 4070, the fp32
+  loop at 1024×1024 needs ~9.9 GB and spills into system RAM (~4.7 s/step); bf16 needs ~6 GB
+  and ran at ~0.4 s/step in a micro-benchmark. One full 500-step dish (composition + style
+  transfer + save) took ~6.4 minutes, versus roughly 65 minutes before.
+- bf16 was validated visually, not by comparing against fp32 output numerically.
 
 ## Usage
 
@@ -63,3 +72,18 @@ working resolution.
    ```bash
    python grow_colonies.py -c colonies -e empty_dishes -s style_dishes -o generated
    ```
+5. Export to a YOLO detection dataset (train/val split by source dish, so crops of one dish
+   never land in both splits):
+   ```bash
+   python export_yolo.py -i generated -o yolo_dataset
+   ```
+   The exporter maps AGAR class ids to the detector's class order, drops boxes smaller than
+   12 px, and drops any box whose instance mask covers under 10% of it (a label with no visible
+   colony).
+
+### Label coordinate convention
+
+The generated `.json` files store `x`/`width` along image **rows** and `y`/`height` along
+**columns** (the transpose of the usual image convention), inherited from the upstream code.
+`export_yolo.py` converts this to standard YOLO boxes; if you consume the JSON directly, swap
+the axes.

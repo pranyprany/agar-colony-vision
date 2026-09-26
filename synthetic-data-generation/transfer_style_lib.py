@@ -11,7 +11,6 @@ from PIL import Image
 import numpy as np
 import time
 
-torch.backends.cudnn.benchmark = True
 
 img_mean = (0.485, 0.456, 0.406) # ImageNet
 img_std = (0.229, 0.224, 0.225)
@@ -166,7 +165,7 @@ def load_image(image):
 def im_convert(tensor):
     """ Display a tensor as an image. """
 
-    image = tensor.to("cpu").clone().detach()
+    image = tensor.to("cpu").clone().detach().float()
     image = image.numpy().squeeze(0)    # change size to (channel, height, width)
 
     '''
@@ -206,7 +205,7 @@ def get_features(image, model, layers=None):
     for name, layer in model._modules.items():
         x = layer(x)    #  layer(x) is the feature map through the layer when the input is x
         if name in layers:
-            features[layers[name]] = x
+            features[layers[name]] = x.float()
     
     return features
 
@@ -241,8 +240,10 @@ def style_transfer(content_image, style_image, previous_model):
     style_image = load_image(style_image)
     style_image = style_image.to(device)
 
-    content_features = get_features(content_image, VGG)
-    style_features   = get_features(style_image, VGG)
+    amp = torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=(device.type == 'cuda'))
+    with amp:
+        content_features = get_features(content_image, VGG)
+        style_features   = get_features(style_image, VGG)
 
     style_gram_matrixs = {layer: get_grim_matrix(style_features[layer]) for layer in style_features}
     target = content_image.clone().requires_grad_(True).to(device)
@@ -270,9 +271,9 @@ def style_transfer(content_image, style_image, previous_model):
     for epoch in range(0, steps+1):
         
         scheduler.step()
-        target = style_net(content_image).to(device)
-        target.requires_grad_(True)
-        target_features = get_features(target, VGG)  # extract output image's all feature maps
+        with amp:
+            target = style_net(content_image).to(device)
+            target_features = get_features(target, VGG)  # extract output image's all feature maps
         content_loss = torch.mean((target_features['conv4_2'] - content_features['conv4_2']) ** 2)    
         style_loss = 0
         # compute each layer's style loss and add them

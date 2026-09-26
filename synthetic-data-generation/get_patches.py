@@ -94,6 +94,10 @@ def main(input_dir, output_dir):
                         alpha_from_bboxes = alphas[ic].transpose()
                         try:
                             alpha_from_seg = lib.get_alpha_from_segmentation(patch_image)
+                            in_box = alpha_from_bboxes == 1
+                            cover = alpha_from_seg[in_box].mean() if in_box.any() else 0.
+                            if cover > 0.96 or cover < 0.2:
+                                alpha_from_seg = lib.ellipse_alpha(alpha_from_seg.shape, patches_grouped_coordinates[ic])
                             alpha_from_blending = lib.get_alpha_from_blending_with_backgroung(patch_image, alpha_from_seg, alpha_from_bboxes)
                         except ValueError: 
                             print("ValueError")

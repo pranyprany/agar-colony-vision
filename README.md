@@ -15,9 +15,10 @@ images, plus a live webcam detection app.
 
 An adaptation of NeuroSYS's synthetic AGAR image generator (colony extraction + composition +
 neural style transfer), explored as a way to grow the detection training set beyond the raw
-AGAR images. Runs end-to-end after fixing several library-version compatibility issues the
-original 2021 code had accumulated. A full retrain-and-compare against the detection baseline
-is still open — see that folder's README for the compute cost involved and why it's not done yet.
+AGAR images. Runs end-to-end after fixing library-version breakage and a label-quality bug in
+the original 2021 code, and includes a YOLO-format exporter. No detector has been trained on
+synthetic data yet, so the effect on the detection baseline is unmeasured — see that folder's
+README for details.
 
 ## Data & weights
 
